@@ -23,10 +23,10 @@
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
-    // ====== あなたの値に合わせて ======
+    // ====== あなたの値 ======
     const LIFF_ID = "2006831763-61xmRle3";
     const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbzx463KHzP7rpu2zgd676tAZi0BBgJkweRPOWgNTdprZ1MII1boh52Uo5jbPEePtaAH/exec";
-    // =================================
+    // =======================
 
     const msgEl = document.getElementById("msg");
     const logEl = document.getElementById("log");
@@ -37,33 +37,51 @@
     function log(s){ logEl.textContent += s + "\n"; }
     function setMsg(s){ msgEl.textContent = s; log("MSG: " + s); }
 
-    // GASへ送信（レスポンスは読まない：CORS/LINE WebView回避）
-    async function callApi(payload){
-      setMsg("送信中...");
-      log("POST " + GAS_ENDPOINT);
-      log("payload=" + JSON.stringify(payload));
-
-      try{
-        await fetch(GAS_ENDPOINT, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type":"text/plain;charset=utf-8" },
-          body: JSON.stringify(payload)
-        });
-        setMsg("トークに案内を送信しました。");
-      } catch(e){
-        setMsg("送信に失敗しました（通信制限の可能性）");
-        log("ERR: " + String(e));
-        throw e;
-      }
-    }
-
     log("href=" + location.href);
     log("referrer=" + document.referrer);
 
+    // JSONPでGASに問い合わせ（CORS回避 & modeを受け取れる）
+    function callApi(payload){
+      return new Promise((resolve, reject) => {
+        setMsg("送信中...");
+
+        const cbName = "__cb_" + Math.random().toString(36).slice(2);
+        window[cbName] = (data) => {
+          try { resolve(data); }
+          finally {
+            try { delete window[cbName]; } catch(_) {}
+            script.remove();
+          }
+        };
+
+        const params = new URLSearchParams({
+          callback: cbName,
+          userId: payload.userId || "",
+          code: payload.code || ""
+        });
+
+        // キャッシュ対策
+        const url = GAS_ENDPOINT + "?" + params.toString() + "&t=" + Date.now();
+        log("GET(JSONP) " + url);
+
+        const script = document.createElement("script");
+        script.src = url;
+        script.onerror = () => {
+          try { delete window[cbName]; } catch(_) {}
+          script.remove();
+          reject(new Error("JSONP load failed"));
+        };
+        document.body.appendChild(script);
+      });
+    }
+
     async function main(){
       setMsg("LIFF初期化中...");
-      const initPromise = liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true });
+
+      const initPromise = liff.init({
+        liffId: LIFF_ID,
+        withLoginOnExternalBrowser: true
+      });
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("LIFF init timeout (10s)")), 10000)
       );
@@ -83,11 +101,19 @@
       const userId = profile.userId;
       log("userId=" + userId);
 
-      // ①まず userId だけ送る（登録済みならURLがトークに届く／未登録なら案内が届く）
-      await callApi({ userId });
+      // ① 登録済みチェック（GASがトークへPushしつつ mode を返す）
+      const r = await callApi({ userId });
+      log("mode=" + (r && r.mode));
 
-      // ②画面側は常にコード入力を出す（登録済みの人は入力不要。トークにURLが来る）
-      setMsg("初回登録の方はコードを入力してください。\n（登録済みの方はトークにURLが届きます）");
+      // 登録済み：フォーム出さない → すぐ閉じてトークへ戻す
+      if (r && r.mode === "known") {
+        setMsg("トークに送信しました。");
+        setTimeout(() => liff.closeWindow(), 600);
+        return;
+      }
+
+      // 未登録：フォーム表示
+      setMsg("初回登録の方はコードを入力してください。");
       formEl.style.display = "block";
 
       btnEl.onclick = async () => {
@@ -97,11 +123,18 @@
         formEl.style.display = "none";
         setMsg("登録して送信中...");
 
-        // ③ code 付きで送る（結果はトークに届く）
-        await callApi({ userId, code });
+        const rr = await callApi({ userId, code });
+        log("mode=" + (rr && rr.mode));
 
-        setMsg("送信しました。トークをご確認ください。");
-        setTimeout(()=>liff.closeWindow(), 900);
+        if (rr && rr.mode === "registered") {
+          setMsg("登録してトークに送信しました。");
+          setTimeout(() => liff.closeWindow(), 700);
+          return;
+        }
+
+        // bad_code 等
+        setMsg("コードが確認できませんでした。");
+        formEl.style.display = "block";
       };
     }
 
