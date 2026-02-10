@@ -36,9 +36,21 @@
     function setMsg(s){ msgEl.textContent = s; log("MSG: " + s); }
 
     async function callApi(payload){
-      setMsg("GASへ送信中...");
+      setMsg("送信中...");
       log("POST " + GAS_ENDPOINT);
       log("payload=" + JSON.stringify(payload));
+
+      // CORS回避：レスポンスは読まない（no-cors）
+      // プリフライト回避：Content-Type を text/plain にする
+    await fetch(GAS_ENDPOINT, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type":"text/plain;charset=utf-8" },
+    body: JSON.stringify(payload)
+      });
+
+        setMsg("トークに案内を送信しました。");
+      }
 
       const ctrl = new AbortController();
       const timer = setTimeout(()=>ctrl.abort(), 10000); // 10秒タイムアウト
