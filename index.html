@@ -23,8 +23,10 @@
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
+    // ====== あなたの値に合わせて ======
     const LIFF_ID = "2006831763-61xmRle3";
     const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbzx463KHzP7rpu2zgd676tAZi0BBgJkweRPOWgNTdprZ1MII1boh52Uo5jbPEePtaAH/exec";
+    // =================================
 
     const msgEl = document.getElementById("msg");
     const logEl = document.getElementById("log");
@@ -35,42 +37,23 @@
     function log(s){ logEl.textContent += s + "\n"; }
     function setMsg(s){ msgEl.textContent = s; log("MSG: " + s); }
 
+    // GASへ送信（レスポンスは読まない：CORS/LINE WebView回避）
     async function callApi(payload){
       setMsg("送信中...");
       log("POST " + GAS_ENDPOINT);
       log("payload=" + JSON.stringify(payload));
 
-      // CORS回避：レスポンスは読まない（no-cors）
-      // プリフライト回避：Content-Type を text/plain にする
-    await fetch(GAS_ENDPOINT, {
-    method: "POST",
-    mode: "no-cors",
-    headers: { "Content-Type":"text/plain;charset=utf-8" },
-    body: JSON.stringify(payload)
-      });
-
-        setMsg("トークに案内を送信しました。");
-      }
-
-      const ctrl = new AbortController();
-      const timer = setTimeout(()=>ctrl.abort(), 10000); // 10秒タイムアウト
       try{
-        const res = await fetch(GAS_ENDPOINT, {
+        await fetch(GAS_ENDPOINT, {
           method: "POST",
-          headers: { "Content-Type":"application/json" },
-          body: JSON.stringify(payload),
-          signal: ctrl.signal
+          mode: "no-cors",
+          headers: { "Content-Type":"text/plain;charset=utf-8" },
+          body: JSON.stringify(payload)
         });
-        clearTimeout(timer);
-
-        const text = await res.text();
-        log("HTTP " + res.status);
-        log("raw=" + text.slice(0, 200)); // 先頭だけ表示
-
-        // JSONでなければここで落ちる→原因が分かる
-        return JSON.parse(text);
+        setMsg("トークに案内を送信しました。");
       } catch(e){
-        clearTimeout(timer);
+        setMsg("送信に失敗しました（通信制限の可能性）");
+        log("ERR: " + String(e));
         throw e;
       }
     }
@@ -78,18 +61,13 @@
     log("href=" + location.href);
     log("referrer=" + document.referrer);
 
-
     async function main(){
       setMsg("LIFF初期化中...");
-      const initPromise = liff.init({
-  liffId: LIFF_ID,
-  withLoginOnExternalBrowser: true
-});
-const timeoutPromise = new Promise((_, reject) =>
-  setTimeout(() => reject(new Error("LIFF init timeout (10s)")), 10000)
-);
-await Promise.race([initPromise, timeoutPromise]);
-
+      const initPromise = liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("LIFF init timeout (10s)")), 10000)
+      );
+      await Promise.race([initPromise, timeoutPromise]);
 
       log("isInClient=" + liff.isInClient());
       log("isLoggedIn=" + liff.isLoggedIn());
@@ -105,16 +83,11 @@ await Promise.race([initPromise, timeoutPromise]);
       const userId = profile.userId;
       log("userId=" + userId);
 
-      // 登録済みチェック
-      const r = await callApi({ userId });
+      // ①まず userId だけ送る（登録済みならURLがトークに届く／未登録なら案内が届く）
+      await callApi({ userId });
 
-      if (r.mode === "known") {
-        setMsg("トークに送信しました。");
-        setTimeout(()=>liff.closeWindow(), 800);
-        return;
-      }
-
-      setMsg("初回登録が必要です。コードを入力してください。");
+      // ②画面側は常にコード入力を出す（登録済みの人は入力不要。トークにURLが来る）
+      setMsg("初回登録の方はコードを入力してください。\n（登録済みの方はトークにURLが届きます）");
       formEl.style.display = "block";
 
       btnEl.onclick = async () => {
@@ -124,14 +97,11 @@ await Promise.race([initPromise, timeoutPromise]);
         formEl.style.display = "none";
         setMsg("登録して送信中...");
 
-        const rr = await callApi({ userId, code });
-        if (rr.mode === "registered") {
-          setMsg("登録してトークに送信しました。");
-          setTimeout(()=>liff.closeWindow(), 900);
-        } else {
-          setMsg("コードが確認できませんでした。");
-          formEl.style.display = "block";
-        }
+        // ③ code 付きで送る（結果はトークに届く）
+        await callApi({ userId, code });
+
+        setMsg("送信しました。トークをご確認ください。");
+        setTimeout(()=>liff.closeWindow(), 900);
       };
     }
 
