@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>書類送信</title>
+  <style>
+    body{font-family:system-ui,-apple-system; padding:16px;}
+    input,button{font-size:16px; padding:12px; width:100%; box-sizing:border-box;}
+    button{margin-top:10px;}
+    .msg{margin:10px 0; white-space:pre-wrap;}
+    .log{background:#f6f6f6; padding:10px; border-radius:8px; font-size:12px; white-space:pre-wrap;}
+  </style>
+</head>
+<body>
+  <div class="msg" id="msg">起動中...</div>
+  <div class="log" id="log"></div>
+
+  <div id="form" style="display:none;">
+    <input id="code" placeholder="コードを入力" />
+    <button id="send">送信する</button>
+  </div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    const LIFF_ID = "2006831763-61xmRle3";
+    const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbzx463KHzP7rpu2zgd676tAZi0BBgJkweRPOWgNTdprZ1MII1boh52Uo5jbPEePtaAH/exec";
+
+    const msgEl = document.getElementById("msg");
+    const logEl = document.getElementById("log");
+    const formEl = document.getElementById("form");
+    const codeEl = document.getElementById("code");
+    const btnEl  = document.getElementById("send");
+
+    function log(s){ logEl.textContent += s + "\n"; }
+    function setMsg(s){ msgEl.textContent = s; log("MSG: " + s); }
+
+    async function callApi(payload){
+      setMsg("GASへ送信中...");
+      log("POST " + GAS_ENDPOINT);
+      log("payload=" + JSON.stringify(payload));
+
+      const ctrl = new AbortController();
+      const timer = setTimeout(()=>ctrl.abort(), 10000); // 10秒タイムアウト
+      try{
+        const res = await fetch(GAS_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify(payload),
+          signal: ctrl.signal
+        });
+        clearTimeout(timer);
+
+        const text = await res.text();
+        log("HTTP " + res.status);
+        log("raw=" + text.slice(0, 200)); // 先頭だけ表示
+
+        // JSONでなければここで落ちる→原因が分かる
+        return JSON.parse(text);
+      } catch(e){
+        clearTimeout(timer);
+        throw e;
+      }
+    }
+
+    log("href=" + location.href);
+    log("referrer=" + document.referrer);
+
+
+    async function main(){
+      setMsg("LIFF初期化中...");
+      const initPromise = liff.init({
+  liffId: LIFF_ID,
+  withLoginOnExternalBrowser: true
+});
+const timeoutPromise = new Promise((_, reject) =>
+  setTimeout(() => reject(new Error("LIFF init timeout (10s)")), 10000)
+);
+await Promise.race([initPromise, timeoutPromise]);
+
+
+      log("isInClient=" + liff.isInClient());
+      log("isLoggedIn=" + liff.isLoggedIn());
+
+      if (!liff.isLoggedIn()) {
+        setMsg("ログイン誘導中...");
+        liff.login();
+        return;
+      }
+
+      setMsg("プロフィール取得中...");
+      const profile = await liff.getProfile();
+      const userId = profile.userId;
+      log("userId=" + userId);
+
+      // 登録済みチェック
+      const r = await callApi({ userId });
+
+      if (r.mode === "known") {
+        setMsg("トークに送信しました。");
+        setTimeout(()=>liff.closeWindow(), 800);
+        return;
+      }
+
+      setMsg("初回登録が必要です。コードを入力してください。");
+      formEl.style.display = "block";
+
+      btnEl.onclick = async () => {
+        const code = codeEl.value.trim();
+        if (!code) { setMsg("コードを入力してください。"); return; }
+
+        formEl.style.display = "none";
+        setMsg("登録して送信中...");
+
+        const rr = await callApi({ userId, code });
+        if (rr.mode === "registered") {
+          setMsg("登録してトークに送信しました。");
+          setTimeout(()=>liff.closeWindow(), 900);
+        } else {
+          setMsg("コードが確認できませんでした。");
+          formEl.style.display = "block";
+        }
+      };
+    }
+
+    main().catch(err=>{
+      setMsg("エラーが発生しました");
+      log(String(err));
+    });
+  </script>
+</body>
+</html>
